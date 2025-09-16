@@ -1,0 +1,78 @@
+#!/bin/sh
+# MySQL backup lock hook for qemu-guest-agent fsfreeze (Debian 9 / qemu-ga 2.8)
+set -eu
+
+LOGF="/var/log/mysql-fsfreeze-hook.log"
+PIDF="/run/mysql-backup-lock.pid"
+MYSQL="mysql --protocol=socket --batch --silent"
+
+# Log early and capture errors too
+exec >>"$LOGF" 2>&1
+echo "$(date -Is) hook called with args: $@"
+
+mysql_ok() { $MYSQL -e "SELECT 1" >/dev/null 2>&1; }
+
+start_backup_lock() {
+  ( $MYSQL <<'SQL'
+SET SESSION sql_log_bin=0;
+LOCK INSTANCE FOR BACKUP;
+SELECT SLEEP(3600);
+SQL
+  ) &
+  echo $! > "$PIDF"
+}
+
+start_ftwrl() {
+  ( $MYSQL <<'SQL'
+SET SESSION sql_log_bin=0;
+FLUSH TABLES WITH READ LOCK;
+SELECT SLEEP(3600);
+SQL
+  ) &
+  echo $! > "$PIDF"
+}
+
+stop_locks() {
+  if [ -f "$PIDF" ]; then
+    kill "$(cat "$PIDF")" >/dev/null 2>&1 || true
+    rm -f "$PIDF"
+  fi
+  $MYSQL -e "UNLOCK INSTANCE;" >/dev/null 2>&1 || true
+  $MYSQL -e "UNLOCK TABLES;"  >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+  freeze)
+    if ! mysql_ok; then
+      echo "$(date -Is) MySQL not reachable; skipping DB lock"
+      exit 0
+    fi
+    # Prefer backup lock (MySQL 8.0+)
+    if start_backup_lock; then
+      sleep 0.3
+      if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+        echo "$(date -Is) using LOCK INSTANCE FOR BACKUP"
+        exit 0
+      fi
+    fi
+    # Fallback to FTWRL
+    if start_ftwrl; then
+      sleep 0.3
+      if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+        echo "$(date -Is) using FTWRL fallback"
+        exit 0
+      fi
+    fi
+    echo "$(date -Is) could not acquire any lock (continuing without DB lock)"
+    ;;
+
+  thaw)
+    echo "$(date -Is) thaw: releasing locks"
+    stop_locks
+    ;;
+
+  *)
+    ;;
+esac
+
+exit 0
