@@ -16,7 +16,7 @@ start_backup_lock() {
   ( $MYSQL <<'SQL'
 SET SESSION sql_log_bin=0;
 LOCK INSTANCE FOR BACKUP;
-SELECT SLEEP(3600);
+SELECT SLEEP(1800);
 SQL
   ) &
   echo $! > "$PIDF"
@@ -26,7 +26,7 @@ start_ftwrl() {
   ( $MYSQL <<'SQL'
 SET SESSION sql_log_bin=0;
 FLUSH TABLES WITH READ LOCK;
-SELECT SLEEP(3600);
+SELECT SLEEP(1800);
 SQL
   ) &
   echo $! > "$PIDF"
